@@ -1,0 +1,129 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: "Cormorant Garamond", Georgia, serif;
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  * {
+    @apply border-charcoal-100;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-cream-50 text-charcoal-800 font-sans antialiased;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    @apply bg-gold-200 text-charcoal-900;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-serif text-charcoal-900;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  /* Smooth, large-window scrollbar that fits the warm aesthetic. */
+  ::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #dccdb4;
+    border-radius: 999px;
+    border: 3px solid #fdfbf7;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #c9b494;
+  }
+
+  /* Consistent, visible focus rings for keyboard users (WCAG). */
+  :focus-visible {
+    @apply outline-none ring-2 ring-gold-500 ring-offset-2 ring-offset-cream-50;
+    border-radius: 0.375rem;
+  }
+}
+
+@layer components {
+  .container-narrow {
+    @apply mx-auto w-full max-w-2xl px-5 sm:px-6 lg:px-8;
+  }
+  .container-medium {
+    @apply mx-auto w-full max-w-5xl px-5 sm:px-6 lg:px-8;
+  }
+  .container-wide {
+    @apply mx-auto w-full max-w-7xl px-5 sm:px-6 lg:px-8;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full font-sans font-semibold transition-all duration-300 focus-visible:ring-2 focus-visible:ring-gold-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .btn-primary {
+    @apply bg-charcoal-900 text-cream-50 px-7 py-3.5 shadow-lift hover:bg-charcoal-700 hover:-translate-y-0.5 hover:shadow-gold active:translate-y-0;
+  }
+
+  .btn-gold {
+    @apply bg-gold-600 text-white px-7 py-3.5 shadow-gold hover:bg-gold-700 hover:-translate-y-0.5 active:translate-y-0;
+  }
+
+  .btn-ghost {
+    @apply border border-charcoal-300 text-charcoal-800 px-7 py-3.5 hover:border-charcoal-900 hover:bg-charcoal-900 hover:text-cream-50;
+  }
+
+  .eyebrow {
+    @apply text-xs font-semibold uppercase tracking-[0.22em] text-gold-600;
+  }
+
+  .card {
+    @apply rounded-3xl border border-cream-200 bg-white shadow-card;
+  }
+
+  .link-underline {
+    @apply underline decoration-gold-400 decoration-2 underline-offset-4 hover:decoration-charcoal-900 transition-colors;
+  }
+
+  .input-base {
+    @apply w-full rounded-xl border border-cream-300 bg-cream-50 px-4 py-3 text-charcoal-800 outline-none transition-colors focus:border-gold-500 focus:ring-2 focus:ring-gold-200;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+/* Respect the user's motion preference for all animated affordances. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

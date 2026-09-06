@@ -1,0 +1,791 @@
+// Prisma schema — Rebuild Recovery eBook (storefront + admin CMS/backend)
+//
+// Default database is a zero-configuration SQLite file for local development
+// (see .env.local -> DATABASE_URL="file:./dev.db").
+//
+// For production point DATABASE_URL at PostgreSQL and change the datasource
+// provider to "postgresql", then run `npx prisma migrate dev`.
+//
+// NOTE: SQLite does not support native `Json`/`enum` types. JSON payloads are
+// stored as text and enums/statuses as strings, so the schema remains portable
+// to PostgreSQL (where the same columns map cleanly).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================================================
+// ADMIN / AUTH
+// ==========================================================================
+
+model AdminUser {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  name           String
+  passwordHash   String
+  roleId         String?
+  role           Role?    @relation(fields: [roleId], references: [id])
+  isActive       Boolean  @default(true)
+  emailVerified  Boolean  @default(false)
+  mfaEnabled     Boolean  @default(false)
+  mfaSecret      String?
+  mfaRecovery    String   @default("[]") // JSON array of hashed recovery codes
+  lastLoginAt    DateTime?
+  lastLoginIp    String?
+  mustResetPwd   Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  sessions    AdminSession[]
+  auditLogs   AuditLog[]
+  apiKeys     AdminApiKey[]
+  createdAtVersion String?
+
+  @@index([roleId])
+}
+
+model Role {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  key         String       @unique // super_admin | admin | finance | content | support | analyst
+  description String?
+  isSystem    Boolean      @default(false)
+  isSuperRole Boolean      @default(false) // bypasses all permission checks
+  users       AdminUser[]
+  permissions RolePermission[]
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model Permission {
+  id       String  @id @default(cuid())
+  key      String  @unique
+  category String // e.g. "orders", "cms", "payments"
+  label    String
+
+  roles RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model AdminSession {
+  id        String    @id @default(cuid())
+  userId    String
+  user      AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique // SHA-256 of the raw session token
+  ip        String?
+  userAgent String?
+  device    String?
+  browser   String?
+  os        String?
+  location  String?
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  lastSeen  DateTime  @default(now())
+  revoked   Boolean   @default(false)
+  mfaVerified Boolean @default(true)
+
+  @@index([userId])
+}
+
+model AdminApiKey {
+  id          String    @id @default(cuid())
+  userId      String
+  user        AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  keyHash     String    @unique
+  scopes      String    @default("[]")
+  expiresAt   DateTime?
+  lastUsedAt  DateTime?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       AdminUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String // e.g. ORDER_REFUND, CMS_PUBLISH, PRICE_CHANGE
+  resource   String // e.g. "order", "product", "setting"
+  resourceId String?
+  description String?
+  ip         String?
+  userAgent  String?
+  before     String? // JSON snapshot
+  after      String? // JSON snapshot
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// ==========================================================================
+// CATALOG / PRODUCT / EBOOK
+// ==========================================================================
+
+model Product {
+  id              String   @id @default(cuid())
+  slug            String   @unique
+  name            String
+  description     String?
+  shortDescription String?
+  coverImageId    String?
+  media           Media?   @relation("productCover", fields: [coverImageId], references: [id])
+  priceMinor      Int
+  salePriceMinor  Int?
+  currency        String   @default("USD")
+  discountLabel   String?
+  saleStartsAt    DateTime?
+  saleEndsAt      DateTime?
+  isActive        Boolean  @default(true)
+  isArchived      Boolean  @default(false)
+  sortOrder       Int      @default(0)
+  metadata        String   @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  versions     ProductVersion[]
+  features     ProductFeature[]
+  orderItems   OrderItem[]
+  entitlements Entitlement[]
+  images       Media[]              @relation("productImages")
+  orders       Order[]
+  downloads    Download[]
+}
+
+model ProductFeature {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  title     String
+  text      String?
+  sortOrder Int     @default(0)
+}
+
+model ProductVersion {
+  id          String    @id @default(cuid())
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  version     String // 1.0, 1.1, 2.0
+  mediaId     String?
+  media       Media?    @relation("versionFile", fields: [mediaId], references: [id])
+  fileSize    Int?
+  fileHash    String?
+  releaseNotes String?
+  status      String    @default("active") // active | unpublished | archived
+  uploadedById String?
+  uploadedAt  DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+
+  entitlements     Entitlement[]
+  orderItems       OrderItem[]
+  replacementTo    Replacement[] @relation("fromVersion")
+  replacementFrom  Replacement[] @relation("toVersion")
+  downloads        Download[]
+
+  @@index([productId])
+}
+
+model Replacement {
+  id         String   @id @default(cuid())
+  entitlementId String
+  entitlement Entitlement @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
+  fromVersionId String?
+  fromVersion ProductVersion? @relation("fromVersion", fields: [fromVersionId], references: [id])
+  toVersionId String?
+  toVersion   ProductVersion? @relation("toVersion", fields: [toVersionId], references: [id])
+  reason      String?    @default("")
+  isGlobal    Boolean    @default(false)
+  adminId     String?
+  createdAt   DateTime   @default(now())
+}
+
+// ==========================================================================
+// CUSTOMERS / ORDERS / PAYMENTS / FULFILLMENT
+// ==========================================================================
+
+model Customer {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  name            String
+  country         String?
+  marketingConsent Boolean  @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  orders        Order[]
+  entitlements  Entitlement[]
+  notes         CustomerNote[]
+  downloads     Download[]
+  invoices      Invoice[]
+  customerEvents CustomerEvent[]
+}
+
+model CustomerNote {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  adminId    String?
+  note       String
+  createdAt  DateTime @default(now())
+}
+
+model CustomerEvent {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  type       String // e.g. order_placed, access_granted, download, email_sent
+  payload    String   @default("{}")
+  createdAt  DateTime @default(now())
+
+  @@index([customerId])
+}
+
+model Order {
+  id             String    @id @default(cuid())
+  orderNumber    String    @unique
+  customerId     String?
+  customer       Customer? @relation(fields: [customerId], references: [id])
+  productId      String?
+  product        Product?  @relation(fields: [productId], references: [id])
+  productName    String
+  amountMinor    Int
+  baseAmountMinor Int?
+  discountMinor  Int       @default(0)
+  taxMinor       Int       @default(0)
+  currency       String    @default("USD")
+  status         String    @default("pending") // pending | paid | failed | cancelled | refunded | pending_verification
+  method         String    // razorpay | paypal | wise | demo | manual
+  name           String
+  email          String
+  country        String?
+  providerReference String?
+  paymentId      String?
+  wiseReference  String?
+  wiseProofNote  String?
+  accessGranted  Boolean   @default(false)
+  accessTokenHash String?
+  couponId       String?
+  coupon         Coupon?   @relation(fields: [couponId], references: [id])
+  isManual       Boolean   @default(false)
+  manualReason   String?
+  reference      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  paidAt         DateTime?
+
+  payments      Payment[]
+  items         OrderItem[]
+  invoice       Invoice?
+  entitlements  Entitlement[]
+  refunds       Refund[]
+  notes         AdminNote[]
+  events        PaymentEvent[]
+
+  @@index([email])
+  @@index([status])
+  @@index([createdAt])
+  @@index([orderNumber])
+}
+
+model OrderItem {
+  id         String    @id @default(cuid())
+  orderId    String
+  order      Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId  String?
+  product    Product?  @relation(fields: [productId], references: [id])
+  title      String
+  quantity   Int       @default(1)
+  unitPriceMinor Int
+  versionId  String?
+  version    ProductVersion? @relation(fields: [versionId], references: [id])
+}
+
+model Payment {
+  id           String   @id @default(cuid())
+  orderId      String
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  provider     String   // razorpay | paypal | wise | demo | manual
+  providerPaymentId String?
+  providerOrderId String?
+  amountMinor  Int
+  currency     String   @default("USD")
+  status       String   @default("created") // created | authorized | captured | failed | refunded | cancelled
+  method       String?
+  environment  String   @default("sandbox") // sandbox | live | demo
+  receipt      String?
+  raw          String   @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  refunds      Refund[]
+}
+
+model Refund {
+  id             String   @id @default(cuid())
+  orderId        String?
+  order          Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  paymentId      String
+  payment        Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  amountMinor    Int
+  currency       String   @default("USD")
+  reason         String?
+  status         String   @default("pending") // pending | processed | failed | rejected
+  providerRefundId String?
+  adminId        String?
+  authUserId     String?
+  createdAt      DateTime @default(now())
+  processedAt    DateTime?
+}
+
+model PaymentProvider {
+  id          String   @id @default(cuid())
+  key         String   @unique // razorpay | paypal | wise
+  name        String
+  enabled     Boolean  @default(false)
+  showOnCheckout Boolean @default(true)
+  testKey     String?
+  testSecret  String?
+  liveKey     String?
+  liveSecret  String?
+  environment String   @default("sandbox") // sandbox | live
+  notes       String?
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+  createdAt   DateTime @default(now())
+}
+
+model PaymentWebhook {
+  id           String   @id @default(cuid())
+  provider     String
+  eventType    String
+  payload      String   @default("{}")
+  signature    String?
+  signatureValid Boolean @default(false)
+  status       String   @default("received") // received | processed | failed | ignored
+  retries      Int      @default(0)
+  idempotencyKey String?
+  processedAt  DateTime?
+  error        String?
+  createdAt    DateTime @default(now())
+
+  @@index([provider])
+  @@index([status])
+}
+
+model Entitlement {
+  id             String   @id @default(cuid())
+  customerId     String
+  customer       Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  orderId        String?
+  order          Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  productId      String
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  versionId      String?
+  version        ProductVersion? @relation(fields: [versionId], references: [id])
+  status         String   @default("active") // active | revoked | expired
+  accessTokenHash String?
+  grantedById    String?
+  expiresAt      DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  downloads    Download[]
+  replacements Replacement[]
+  accessLogs   AccessLog[]
+
+  @@index([customerId])
+  @@index([productId])
+}
+
+model AccessLog {
+  id            String      @id @default(cuid())
+  entitlementId String?
+  entitlement   Entitlement? @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
+  customerId    String?
+  orderId       String?
+  action        String // access_granted | revoked | restored | replaced | link_issued
+  detail        String?
+  adminId       String?
+  createdAt     DateTime    @default(now())
+}
+
+model Download {
+  id            String      @id @default(cuid())
+  customerId    String
+  customer      Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  entitlementId String?
+  entitlement   Entitlement? @relation(fields: [entitlementId], references: [id], onDelete: SetNull)
+  orderId       String?
+  productId     String?
+  product       Product?    @relation(fields: [productId], references: [id], onDelete: SetNull)
+  versionId     String?
+  version       ProductVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+  ip            String?
+  userAgent     String?
+  status        String      @default("success") // success | failed | blocked
+  createdAt     DateTime    @default(now())
+
+  @@index([customerId])
+  @@index([createdAt])
+}
+
+model PaymentEvent {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  provider  String
+  eventType String
+  payload   String   @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+  @@index([provider])
+}
+
+model ContactMessage {
+  id          String   @id @default(cuid())
+  name        String
+  email       String
+  orderNumber String?
+  subject     String
+  message     String
+  status      String   @default("new")
+  createdAt   DateTime @default(now())
+
+  @@index([email])
+  @@index([status])
+}
+
+model AdminNote {
+  id        String   @id @default(cuid())
+  orderId   String?
+  order     Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  adminId   String?
+  note      String
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+}
+
+// ==========================================================================
+// CMS / CONTENT
+// ==========================================================================
+
+model WebsiteSection {
+  id        String   @id @default(cuid())
+  key       String   @unique // hero | problem | transformation | features | phases | how | who | preview | pricing | trust | final
+  label     String
+  isEnabled Boolean  @default(true)
+  sortOrder Int      @default(0)
+  // JSON blob of the section's content
+  content   String   @default("{}")
+  // Simple CMS version history (JSOn array of {version, author, date, published})
+  history   String   @default("[]")
+  published Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+  updatedById String?
+}
+
+model FaqItem {
+  id        String   @id @default(cuid())
+  question  String
+  answer    String
+  category  String?
+  sortOrder Int      @default(0)
+  isPublished Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TestimonialItem {
+  id        String   @id @default(cuid())
+  name      String
+  age       Int?
+  situation String?
+  location  String?
+  quote     String
+  imageUrl  String?
+  permission String? // consent status
+  sortOrder Int      @default(0)
+  isPublished Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model LegalPage {
+  id        String   @id @default(cuid())
+  slug      String   @unique // privacy-policy | terms | refund-policy | disclaimer | cookie-policy
+  title     String
+  updated   String?
+  intro     String?
+  content   String   @default("[]") // JSON sections array
+  status    String   @default("draft") // draft | published
+  publishedAt DateTime?
+  history   String   @default("[]")
+  updatedAt DateTime @updatedAt
+  updatedById String?
+}
+
+model SeoConfig {
+  id          String  @id @default(cuid())
+  slug        String  @unique // "home" or page slug
+  title       String?
+  description String?
+  ogTitle     String?
+  ogDescription String?
+  ogImage     String?
+  canonical   String?
+  robots      String? // index,follow
+  updatedAt   DateTime @updatedAt
+}
+
+model Media {
+  id         String   @id @default(cuid())
+  filename   String   @unique
+  originalName String
+  mimeType   String
+  size       Int
+  path       String
+  url        String
+  alt        String?
+  kind       String   @default("image") // image | pdf | epub | other
+  width      Int?
+  height     Int?
+  isPrivate  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  productCover Product[]   @relation("productCover")
+  productImages Product[]   @relation("productImages")
+  versionFiles  ProductVersion[] @relation("versionFile")
+}
+
+model Coupon {
+  id             String    @id @default(cuid())
+  code           String    @unique
+  type           String    @default("percent") // percent | fixed
+  value          Int       // percent (0-100) or minor amount
+  startAt        DateTime?
+  expiresAt      DateTime?
+  usageLimit     Int?
+  perCustomerLimit Int?
+  minOrderMinor  Int?
+  productId      String?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  orders Order[]
+}
+
+// ==========================================================================
+// INVOICES / EMAIL
+// ==========================================================================
+
+model Invoice {
+  id           String   @id @default(cuid())
+  number       String   @unique // INV-2026-000001
+  orderId      String   @unique
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customerId   String?
+  customer     Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  amountMinor  Int
+  taxMinor     Int      @default(0)
+  discountMinor Int     @default(0)
+  totalMinor   Int
+  currency     String   @default("USD")
+  status       String   @default("paid") // paid | unpaid | pending | refunded
+  issuedAt     DateTime @default(now())
+  emailStatus  String   @default("not_sent") // not_sent | sent | failed
+  pdfPath      String?
+}
+
+model EmailTemplate {
+  id        String   @id @default(cuid())
+  key       String   @unique // purchase_confirmation | invoice | ebook_access | ebook_replacement | refund | payment_failure | payment_pending | welcome | password_reset | security_alert
+  name      String
+  subject   String
+  body      String   // supports {{variables}}
+  html      Boolean  @default(true)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model EmailLog {
+  id         String   @id @default(cuid())
+  to         String
+  template   String?
+  subject    String?
+  provider   String
+  status     String   @default("queued") // queued | sent | failed | bounced | complaint
+  messageId  String?
+  error      String?
+  orderId    String?
+  customerId String?
+  createdAt  DateTime @default(now())
+
+  @@index([to])
+  @@index([createdAt])
+}
+
+// ==========================================================================
+// ANALYTICS / VISITORS
+// ==========================================================================
+
+model Visitor {
+  id             String   @id @default(cuid())
+  visitorId      String   @unique // client-generated uuid stored in cookie/localStorage
+  ip             String?
+  ipAnonymized   String?
+  country        String?
+  region         String?
+  city           String?
+  device         String?  // mobile | desktop | tablet
+  browser        String?
+  browserVersion String?
+  os             String?
+  screen         String?
+  language       String?
+  referrer       String?
+  landingPage    String?
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  utmTerm        String?
+  utmContent     String?
+  firstVisit     DateTime @default(now())
+  lastSeen       DateTime @default(now())
+  visitCount     Int      @default(1)
+  createdAt      DateTime @default(now())
+
+  sessions VisitorSession[]
+}
+
+model VisitorSession {
+  id          String   @id @default(cuid())
+  visitorId   String
+  visitor     Visitor  @relation(fields: [visitorId], references: [id], onDelete: Cascade)
+  sessionId   String   @unique
+  startedAt   DateTime @default(now())
+  endedAt     DateTime?
+  isActive    Boolean  @default(true)
+  currentPage String?
+  exitPage    String?
+  pageViews   Int      @default(0)
+  durationSec Int      @default(0)
+  referrer    String?
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  device      String?
+  country     String?
+  checkoutStarted Boolean @default(false)
+  paymentInitiated Boolean @default(false)
+  purchaseCompleted Boolean @default(false)
+  downloaded   Boolean  @default(false)
+
+  pageViewsList PageView[]
+  events      AnalyticsEvent[]
+}
+
+model PageView {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   VisitorSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  visitorId String
+  path      String
+  title     String?
+  viewedAt  DateTime @default(now())
+
+  @@index([sessionId])
+}
+
+model AnalyticsEvent {
+  id        String   @id @default(cuid())
+  sessionId String?
+  session   VisitorSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  visitorId String?
+  category  String   @default("engagement") // engagement | conversion | error
+  event     String   // cta_click | view_pricing | checkout_start | payment_init | purchase | download | ...
+  path      String?
+  metadata  String   @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([event])
+  @@index([createdAt])
+}
+
+// ==========================================================================
+// SETTINGS / SYSTEM
+// ==========================================================================
+
+model SystemSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String   @default("")
+  type      String   @default("string") // string | number | boolean | json
+  group     String   @default("general") // business | commerce | payments | email | storage | analytics | security | legal
+  label     String?
+  updatedAt DateTime @updatedAt
+  updatedById String?
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  type      String   // order | payment | refund | customer | email | webhook | security | system
+  title     String
+  body      String?
+  link      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model BackgroundJob {
+  id        String   @id @default(cuid())
+  type      String   // email | invoice | webhook | analytics | download | notification
+  payload   String   @default("{}")
+  status    String   @default("queued") // queued | running | succeeded | failed | dead
+  attempts  Int      @default(0)
+  maxAttempts Int    @default(3)
+  runAt     DateTime @default(now())
+  completedAt DateTime?
+  error     String?
+  lastErrorAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([type])
+}
+
+model SystemLog {
+  id        String   @id @default(cuid())
+  level     String   @default("info") // info | warning | error | critical
+  service   String?
+  message   String
+  endpoint  String?
+  requestId String?
+  correlationId String?
+  code      String?
+  metadata  String   @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([level])
+  @@index([createdAt])
+}

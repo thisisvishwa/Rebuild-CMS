@@ -1,0 +1,9 @@
+{
+  "extends": "next/core-web-vitals",
+  "rules": {
+    // The site's copy uses natural apostrophes and quotes (e.g. "you're",
+    // "don't"). React escapes text output automatically, so these are safe.
+    // This rule only flags literal characters in JSX text, not security issues.
+    "react/no-unescaped-entities": "off"
+  }
+}
