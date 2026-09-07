@@ -16,7 +16,7 @@ export async function GET() {
       await logAudit({ userId: session.userId, action: "LOGOUT", resource: "admin", description: "Admin signed out", ip: getClientIp(new Request("http://x")) });
     }
   }
-  const res = NextResponse.redirect(new URL("/admin/login", process.env.APP_URL ?? "http://localhost:3000"));
+  const res = NextResponse.redirect(new URL("/login", process.env.APP_URL ?? "http://localhost:3000"));
   res.cookies.set(ADMIN_COOKIE, "", sessionCookieOptions());
   return res;
 }
