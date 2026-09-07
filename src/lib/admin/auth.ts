@@ -140,7 +140,7 @@ export function hasPermission(ctx: AuthContext, perm: string): boolean {
 
 export async function requireAuth(): Promise<AuthContext> {
   const ctx = await getAuthContext();
-  if (!ctx) redirect("/admin/login");
+  if (!ctx) redirect("/login");
   return ctx;
 }
 
