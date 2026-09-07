@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "buildCommand": "npm run db:sync-postgres && prisma generate --schema prisma/schema.postgresql.prisma && prisma db push --schema prisma/schema.postgresql.prisma && tsx prisma/seed.ts && next build",
+  "buildCommand": "npm run db:sync-postgres && prisma generate --schema prisma/schema.postgresql.prisma && next build",
   "installCommand": "npm install"
 }
