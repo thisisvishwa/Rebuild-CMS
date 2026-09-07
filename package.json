@@ -20,7 +20,8 @@
     "db:sync-postgres": "node scripts/sync-postgres-schema.mjs",
     "db:push:pg": "prisma db push --schema prisma/schema.postgresql.prisma",
     "db:generate:pg": "prisma generate --schema prisma/schema.postgresql.prisma",
-    "db:seed:pg": "tsx prisma/seed.ts"
+    "db:seed:pg": "tsx prisma/seed.ts",
+    "db:setup:pg": "prisma db push --schema prisma/schema.postgresql.prisma && tsx prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

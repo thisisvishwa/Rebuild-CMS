@@ -82,18 +82,36 @@ Next.js automatically and reads `vercel.json` for the build command, which:
 ```json
 {
   "framework": "nextjs",
-  "buildCommand": "npm run db:sync-postgres && prisma generate --schema prisma/schema.postgresql.prisma && next build",
+  "buildCommand": "npm run db:sync-postgres && prisma generate --schema prisma/schema.postgresql.prisma && prisma db push --schema prisma/schema.postgresql.prisma && tsx prisma/seed.ts && next build",
   "installCommand": "npm install"
 }
 ```
 
-> The build regenerates the Prisma client **against the Postgres schema** so the
-> generated client matches the production database. (On deploy environments the
-> provider-level `DATABASE_URL` must be present; `prisma generate` alone doesn't connect.)
+> The build does four things, in order:
+> 1. **`db:sync-postgres`** — regenerates `schema.postgresql.prisma` from `schema.prisma`
+>    so the Postgres copy always matches (they differ only by `provider`).
+> 2. **`prisma generate`** against the Postgres schema — makes the generated client match
+>    the production database.
+> 3. **`prisma db push`** — **creates the database tables** (idempotent; safe on an empty
+>    DB). This is what prevents `P2021 "table does not exist"` errors at runtime.
+> 4. **`tsx prisma/seed.ts`** — **seeds** the super-admin, roles/permissions, product, CMS,
+>    FAQs, legal, email templates, payment providers, and settings (idempotent upserts;
+>    it won't reset an existing super-admin's password). This is what makes the admin
+>    login work immediately after the first deploy.
+>
+> Because the build pushes the schema and seeds, a fresh project is fully
+> **self-provisioning** — you don't need to run database commands manually. If your build
+> env does not have `DATABASE_URL`, `db push` fails and the deploy aborts (see
+> **Troubleshooting**).
 
 **Runtime note:** Vercel's default Node runtime for Next.js 14 is fine. The heavy admin
 routes (seed/backup/email) are within the default function time limits; if any route
 times out, add `export const maxDuration = 60` to that specific route file.
+
+> **Before the first deploy**, set `ADMIN_EMAIL` / `ADMIN_PASSWORD` in Vercel env so the
+> seed creates *your* admin account. If left unset, the seed creates the dev bootstrap
+> `admin@rebuild.local` / `AdminPass!2026`, which you must change on the **Admin Users**
+> page right after login.
 
 ### 2b. Set Environment Variables
 
@@ -248,3 +266,90 @@ verify it). **This is not yet built** — see the audit report.
 - Every Vercel deploy is immutable; choose a previous deployment in **Deployments →
   Promote** to roll back.
 - Do **not** roll the database back independently — keep DB migrations additive.
+
+---
+
+## 9. Troubleshooting — from the logs
+
+These are the two failures seen on a fresh `rebuild-cms` deploy and how to fix each.
+
+### 9a. `ERR_TOO_MANY_REDIRECTS` on `/admin/login` (infinite 307 loop)
+
+**Symptom:** opening `/admin/login` (or `/admin`) shows "This page isn't working —
+redirected you too many times" (`ERR_TOO_MANY_REDIRECTS`). Vercel logs show many
+`GET /admin/login -> 307`.
+
+**Cause (code bug, already fixed):** `/admin/login` was a child of `/admin`, so it
+inherited `admin/layout.tsx`, which calls `requireAuth()` and does
+`redirect("/admin/login")` when there's **no session**. Because the request was *already*
+on `/admin/login`, it redirected to itself forever.
+
+**Fix:** moved the auth-guarded shell into a `(protected)` route group so the login page
+is a sibling that does **not** run the guard:
+
+```
+src/app/admin/
+  (protected)/          <- all 31 dashboard pages + the guarded layout (sidebar/header)
+  login/page.tsx        <- /admin/login, NOT wrapped by requireAuth()
+```
+
+- `/admin/login` (no cookie) now renders the form (HTTP **200**, no loop).
+- `/admin` (no cookie) redirects once to `/admin/login` (correct).
+- `/admin` (with cookie) returns **200**.
+
+This needs a **redeploy** — the fix is in the pushed code, not an env var.
+
+### 9b. `P2021: The table ... does not exist` → `/api/storefront` and `/api/checkout` return 500
+
+**Symptom:** Vercel logs show `500` on `GET /api/storefront` and `POST /api/checkout`,
+with the message:
+
+```
+PrismaClientKnownRequestError: Invalid `prisma.product.findFirst()` invocation:
+The table `public.Product` does not exist in the current database.
+(code: P2021)
+```
+
+**Cause:** the app **is** connecting to Postgres fine (`DATABASE_URL` is correct), but the
+**tables were never created and never seeded** — the database provisioning step was
+skipped. The storefront `/` still renders 200 because it falls back to bundled copy when
+the API fails, which hides the problem.
+
+**Fix (two options):**
+
+Option A — **let the deployed app self-provision (recommended for the first deploy).**
+The `vercel.json` build command now runs `prisma db push` (creates tables) and
+`tsx prisma/seed.ts` (seeds super-admin + product + CMS) **during the build**, so you only
+need to redeploy. Ensure `DATABASE_URL` is set in the project environment. This is what
+the current `vercel.json` does.
+
+Option B — **run provisioning once against the production DB** (if you prefer not to touch
+the build):
+
+```bash
+# Windows (PowerShell) — from the project root, with your production Postgres URL:
+$env:DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require"
+$env:ADMIN_EMAIL="you@company.com"
+$env:ADMIN_PASSWORD="A-STRONG-Unique-Password!"
+npm run db:push:pg      # create all tables
+npm run db:seed:pg      # seed super-admin, product, CMS, providers, templates
+```
+
+After the tables exist, `/api/storefront` and `/api/checkout` return 200 and the admin can
+log in.
+
+> **Note:** if a `prisma db push` in the build ever needs to drop/recreate a column and
+> hangs waiting for confirmation (non-interactive shell), the deploy will stall. If that
+> happens, run `prisma db push --accept-data-loss` locally once, or adopt Prisma Migrate
+> (`prisma migrate dev` → commit migration SQL → `prisma migrate deploy` in the build) for
+> full versioned schema control.
+
+### 9c. Other things to confirm after deploy
+
+- **`APP_URL`** set to your production URL (no trailing slash). Otherwise PayPal return,
+  access links, and invoices point at `http://localhost:3000`.
+- **`ACCESS_TOKEN_SECRET`** set to a long random value (not the dev fallback).
+- **Email** uses `EMAIL_TRANSPORT=smtp` only when you've configured SMTP; otherwise it
+  logs to Vercel function logs.
+- **Media/upload persistence** requires `STORAGE_DRIVER=vercel` + a `BLOB_READ_WRITE_TOKEN`
+  (otherwise uploads are ephemeral).
